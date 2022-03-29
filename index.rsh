@@ -1,28 +1,24 @@
 'reach 0.1';
 
-const AuctionAsset = Object({
-    bidFloor: UInt,
+const AuctionProps = Object({
+    startingbid: UInt,
     timeout: UInt});
 
-const BidderNumbers = {
-    amountBid: Fun([UInt], Maybe(UInt)) };
-    
-const floorAuction = { bidFloor:0,timeout:0}
+const BidderProps = {
+    getBid: Fun([UInt], Maybe(UInt)) };
 
-export const main = Reach.App(() => {
-    const Auctioneer = Participant('Auctioneer', {
-        // Specify Auctioneer's interact interface here
-        introAuctioneer: Fun([UInt,Address],Null),
-        introAuctionAsset: Fun([],AuctionAsset),
-        ...BidderNumbers,
-        getId: Fun([], UInt)
-    });
-    const WinningBidder   = Participant('WinningBidder', {
-        // Specify WinningBidder's interact interface here
-        introWinningBidder: Fun([UInt,Address],Null),
-        introAuctionAsset: Fun([],AuctionAsset),
-        ...BidderNumbers
-    });
+const OwnerInterface={
+  showOwner: Fun([UInt,Address],Null),
+  getAuctionProps:Fun([],AuctionProps),
+  ...BidderProps };
+
+const CreatorInterface={
+  ...OwnerInterface,
+  getId: Fun([], UInt) };
+const emptyAuction = {startingbid:0,timeout:0};
+
+export const main = Reach.App({},
+  );
     init();
     // write your program here
     (Auctioneer,WinningBidder) => {
@@ -44,6 +40,7 @@ export const main = Reach.App(() => {
             Auctioneer
                 .publish(bidFloor,timeout)
                 .when(amAuctioneer)
+                
                 .timeout(false);
 
             const [timeLeft, keepGoing]=makeDeadline(timeout);
