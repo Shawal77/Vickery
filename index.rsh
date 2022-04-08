@@ -1,80 +1,69 @@
 'reach 0.1';
-//auction starting price and timeout
-const AuctionProps = Object({
-    startingbid: UInt,
-    timeout: UInt});
+'use strict';
 
-const BidderProps = {
-    getBid: Fun([UInt], Maybe(UInt)) };
-//Owner is person holding the item
-const OwnerInterface={
-  showOwner: Fun([UInt,Address],Null),
-  getAuctionProps:Fun([],AuctionProps),
-  ...BidderProps };
-//creator is auctioneer
-const CreatorInterface={
-  ...OwnerInterface,
-  getId: Fun([], UInt) };
-const emptyAuction = {startingbid:0,timeout:0};
+// FOMO Workshop generalized to last N winners
+const NUM_OF_WINNERS = 3;
+
+const CommonInterface = {
+  showOutcome: Fun([Array(Address, NUM_OF_WINNERS)], Null),
+};
+
+const AuctioneerInterface = {
+  ...CommonInterface,
+  getParams: Fun([], Object({
+    deadline: UInt, // relative deadline
+    ticketPrice: UInt,
+  })),
+};
+
+const BidderInterface = {
+  ...CommonInterface,
+  shouldBuyTicket: Fun([UInt], Bool),
+  showPurchase: Fun([Address], Null),
+};
 
 export const main = Reach.App(
-  {},[
-    Participant('Creator',CreatorInterface),
-    Participant('Owner',OwnerInterface)
+  { },
+  [
+    Participant('Auctioneer', AuctioneerInterface), ParticipantClass('Bidder', BidderInterface),
   ],
-  (Creator,Owner) => {
-    Creator.only(()=>{
-        const id = declassify(interact.getId());
-    });
-    Creator.publish(id);
+  (Auctioneer, Bidder) => {
+    const showOutcome = (winners) =>
+      each([Auctioneer, Bidder], () => interact.showOutcome(winners));
 
-    var owner=Creator;
-    invariant(balance()==0);
-    //we use while loop to repeat calculation for all bidders
-    while (true) {
-        commit();//first save the previous bid
-        //Owner tells about the auction
-        Owner.only(()=>{
-            interact.showOwner(id,owner);//owner/auctioneer intro
-            const amOwner=this==owner;
-            const {startingbid,timeout}=amOwner?declassify(interact.getAuctionProps()):emptyAuction;
-         });
-        Owner
-            .publish(startingbid,timeout)
-            .when(amOwner)
-            .timeout(false);
+    Auctioneer.only(() => {
+      const { ticketPrice, deadline } = declassify(interact.getParams()); });
+    Auctioneer.publish(ticketPrice, deadline);
 
-        const [timeRemaining, keepGoing]=makeDeadline(timeout);
-        //let them fight for the best bidder
-        const [winner, isFirstbid, currentPrice]=
-          parallelReduce([owner,true,startingbid])
-            .invariant(balance()==(isFirstbid?0:currentPrice))
-            .while(keepGoing())
-            .case(Owner,
-              (() => {
-                const mbid =(this != owner && this != winner)
-                  ?declassify(interact.getBid(currentPrice))
-                  :Maybe(UInt).None();
-                return ({
-                  when: maybe(mbid,false,((bid)=>bid>currentPrice)),
-                  msg: fromSome(mbid,0),
-                });
-              }),
-              ((bid) => bid),
-              ((bid) => {
-                require(bid>currentPrice);
-                //return funds to previous highest bidder
-                transfer(isFirstbid?0:currentPrice).to(winner);
-                return [this,false,bid];
-              })
-            )
-            .timeRemaining(timeRemaining());
+    const initialWinners = Array.replicate(NUM_OF_WINNERS, Auctioneer);
 
-          transfer(isFirstbid?0:currentPrice).to(owner);
+    // Until deadline, allow Bidders to buy ticket
+    const [ keepGoing, winners, ticketsSold ] =
+      parallelReduce([ true, initialWinners, 0 ])
+        .invariant(balance() == ticketsSold * ticketPrice)
+        .while(keepGoing)
+        .case(
+          Bidder,
+          () => ({
+            when: declassify(interact.shouldBuyTicket(ticketPrice)) }),
+          (_) => ticketPrice,
+          (_) => {
+            const Bidder = this;
+            Bidder.only(() => interact.showPurchase(Bidder));
+            const idx = ticketsSold % NUM_OF_WINNERS;
+            const newWinners =
+              Array.set(winners, idx, Bidder);
+            return [ true, newWinners, ticketsSold + 1 ]; })
+        .timeout(relativeTime(deadline), () => {
+          Anybody.publish();
+          return [ false, winners, ticketsSold ]; });
 
-          owner = winner;
-          continue;
-        };
-        commit();
-        exit();
-    });
+    transfer(balance() % NUM_OF_WINNERS).to(Auctioneer);
+    const reward = balance() / NUM_OF_WINNERS;
+
+    winners.forEach(winner =>
+      transfer(reward).to(winner));
+      
+    commit();
+    showOutcome(winners);
+  });
